@@ -107,8 +107,6 @@ def pkcs7_pad(somebytes, blocksize):
     """
     result = bytes(somebytes)
     pad_bytes = blocksize - (len(somebytes) % blocksize)
-    if pad_bytes in [0, blocksize]:
-        return result
     result += bytes([pad_bytes] * pad_bytes)
     return result
 

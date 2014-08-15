@@ -12,6 +12,7 @@ import operator
 from random import randrange
 import sys
 import textutil
+import util
 
 from Crypto.Cipher import AES
 
@@ -186,6 +187,25 @@ def c12():
     plaintext = crypto.break_ecb(crypto.encryption_oracle_2)
     print('Discovered plaintext:')
     print(plaintext.decode())
+
+@challenge(13)
+def c13():
+    # Using only the user input to encrypted_profile_for() (as an oracle to
+    # generate "valid" ciphertexts) and the ciphertexts themselves, make a
+    # role=admin profile.
+    # 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+    # email=XXXXXXXXXXadmin&uid=10&role=user
+    # email=u@trustme.com&uid=10&role=user
+    crypted_admin = util.encrypted_profile_for('XXXXXXXXXXadmin')[16:32]
+    temp = util.encrypted_profile_for('u@trustme.com')
+    crypted_email_uid = temp[0:32]
+    crypted_trail= temp[32:]
+    # This ends up: email=u@trustme.com&uid=10&role=admin&uid=10&roluser
+    # uid is repeated and there is a trailing 'roluser' parameter not assigned
+    # to any value.  Depending how the server is implemented, it may work.
+    # It's possible there is an even cleaner solution.
+    evil_profile = crypted_email_uid + crypted_admin + crypted_trail
+    print(util.decrypt_profile(evil_profile))
 
 if __name__ == '__main__':
     if len(sys.argv) > 1:
