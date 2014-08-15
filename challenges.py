@@ -9,8 +9,11 @@
 
 import crypto
 import operator
+from random import randrange
 import sys
 import textutil
+
+from Crypto.Cipher import AES
 
 # Register methods as challenges with this decorator.
 challenges = {}
@@ -107,6 +110,82 @@ def c6():
     key, text = crypto.brute_xor(cipherbytes, key_candidates)
     print('Decrypted with key: %s' % key.decode())
     print('%s' % text)
+
+@challenge(7)
+def c7():
+    b64text = open('inputs/7.txt').read()
+    cryptbytes = crypto.base64_to_bytes(b64text)
+    text = crypto.decrypt_aes_ecb(cryptbytes, b'YELLOW SUBMARINE').decode()
+    print('Decrypted:')
+    print('%s' % text)
+
+@challenge(8)
+def c8():
+    for line_no, line in enumerate(open('inputs/8.txt').readlines()):
+        crypthex = line.strip()
+        chunks = [crypthex[i:i+32] for i in range(0, len(crypthex), 32)]
+        duplicates = len(chunks) - len(set(chunks))
+        if duplicates > 0:
+            print('Line %d: probable block cipher (%d repeated blocks)' %
+                  (line_no, duplicates))
+            # Are we supposed to decrypt it?
+
+@challenge(9)
+def c9():
+    INPUT = 'YELLOW SUBMARINE'
+    EXPECT = b'YELLOW SUBMARINE\x04\x04\x04\x04'
+    result = crypto.pkcs7_pad(crypto.str_to_bytes(INPUT), 20)
+    print(result)
+    expect(result, EXPECT)
+
+@challenge(10)
+def c10():
+    # My own test data
+    message = 'The crow flies from the chicken coop at dawn.'
+    key = b'YeLlOw SuBmArInE'
+    blocksize = len(key)
+    iv = bytes([randrange(0, 256) for i in range(0, blocksize)])
+    cryptbytes = crypto.encrypt_aes_cbc(crypto.str_to_bytes(message), iv, key)
+    print('Encrypted: %r' % cryptbytes)
+    plainbytes = crypto.decrypt_aes_cbc(cryptbytes, iv, key)
+    print('Decrypted: %r' % plainbytes.decode())
+    expect(plainbytes.decode(), message)
+
+    # Decrypt the example from Cryptopals
+    key = b'YELLOW SUBMARINE'
+    blocksize = len(key)
+    iv = bytes([0]*blocksize)
+    cryptbytes = crypto.base64_to_bytes(open('inputs/10.txt').read())
+    decrypted = crypto.decrypt_aes_cbc(cryptbytes, iv, key)
+    print(decrypted.decode())
+
+@challenge(11)
+def c11():
+    # Need to provoke a duplicate encrypted block, so let's include at least
+    # 32 bytes of redundant input, plus another 32 just to compensate for any
+    # padding.
+    inputbytes = bytes([0]*64)
+    ecb_count = 0
+    cbc_count = 0
+    # Run a lot of trials and expect about a 1:1 ratio of ECB:CBC detected.
+    trials = 10000
+    for i in range(0, trials):
+        mode = crypto.identify_aes_mode(crypto.encryption_oracle(inputbytes))
+        if mode == 'ECB': ecb_count += 1
+        elif mode == 'CBC': cbc_count += 1
+        else: raise Exception('Unexpected mode string: %s' % mode)
+    print('ECB count: %d' % ecb_count)
+    print('CBC count: %d' % cbc_count)
+    if abs(1 - float(ecb_count)/cbc_count) < 0.1:
+        print('Looks good to me.')
+    else:
+        print('Might not be working very well.')
+
+@challenge(12)
+def c12():
+    plaintext = crypto.break_ecb(crypto.encryption_oracle_2)
+    print('Discovered plaintext:')
+    print(plaintext.decode())
 
 if __name__ == '__main__':
     if len(sys.argv) > 1:
