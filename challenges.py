@@ -21,7 +21,11 @@ challenges = {}
 def challenge(n):
     def decorator(f):
         def wrapper(*args, **kwargs):
-            print('Executing challenge %d...' % n)
+            print('')
+            print('-----------------------')
+            print(' Begin challenge %d...' % n)
+            print('-----------------------')
+            print('')
             f(*args, **kwargs)
         challenges[n] = wrapper
         return wrapper
@@ -186,7 +190,7 @@ def c11():
 def c12():
     plaintext = crypto.break_ecb(crypto.encryption_oracle_2)
     print('Discovered plaintext:')
-    print(plaintext.decode())
+    print(plaintext)
 
 @challenge(13)
 def c13():
@@ -207,7 +211,14 @@ def c13():
     evil_profile = crypted_email_uid + crypted_admin + crypted_trail
     print(util.decrypt_profile(evil_profile))
 
+@challenge(14)
+def c14():
+    message = crypto.break_ecb(crypto.encryption_oracle_3)
+    print('Message:')
+    print(message)
+
 if __name__ == '__main__':
+    to_run = sorted(challenges.keys())
     if len(sys.argv) > 1:
         try:
             n = int(sys.argv[1])
@@ -217,7 +228,6 @@ if __name__ == '__main__':
         if not n in challenges:
             print('No such challenge: %d' % n)
             sys.exit(1)
+        to_run = [n]
+    for n in to_run:
         challenges[n]()
-    else:
-        for n in sorted(challenges.keys()):
-            challenges[n]()

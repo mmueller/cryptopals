@@ -12,7 +12,7 @@
 import base64
 import binascii
 from itertools import combinations, cycle, starmap
-from random import randrange
+from random import randrange, sample
 import textutil
 from util import compose
 
@@ -105,16 +105,24 @@ def pkcs7_pad(somebytes, blocksize):
     Return a copy of somebytes with PKCS #7 padding added, bringing the length
     up to an even multiple of blocksize.
     """
-    result = bytes(somebytes)
     pad_bytes = blocksize - (len(somebytes) % blocksize)
-    result += bytes([pad_bytes] * pad_bytes)
+    result = somebytes + bytes([pad_bytes] * pad_bytes)
     return result
 
 def pkcs7_unpad(somebytes):
     """
     Return a copy of somebytes with PKCS #7 padding removed.
     """
-    return bytes(somebytes[:-somebytes[-1]])
+    assert pkcs7_is_padded(somebytes)
+    return somebytes[:-somebytes[-1]]
+
+def pkcs7_is_padded(somebytes):
+    """
+    Returns True if the given bytes have valid PKCS #7 padding at the end,
+    otherwise False.
+    """
+    padding = somebytes[-somebytes[-1]:]
+    return all([padding[b] == len(padding) for b in range(0, len(padding))])
 
 def decrypt_aes_ecb(cryptbytes, keybytes):
     "For now, just a wrapper around Pycrypto AES."
@@ -195,6 +203,21 @@ def encryption_oracle_2(plainbytes):
     plainbytes = pkcs7_pad(plainbytes, 16)
     return encrypt_aes_ecb(plainbytes, key)
 
+def encryption_oracle_3(plainbytes):
+    """
+    As described in challenge 14, this modifies encryption_oracle_2 to prepend
+    a random amount of junk at the beginning, so that the plaintext fed to the
+    encryption function is: (random junk) + (plainbytes) + (target to decrypt)
+    """
+    b64text = ('SSB0aGluayBvZiBDaGluZXNlIGZvb2Qgd2hlbiBJIHRoaW5rIG9mI' +
+               'GxpZmUKSXQncyBzd2VldCBhbmQgc291cgpNeSBsaWZlIGlzIHN3ZW' +
+               'V0IGFzIHNhY2NoYXJpbmUKWW91IGtub3cgdGhyZWUtd2Vlay1vbGQ' +
+               'gbWlsayBhbmQgZ3JhcGVzIGFyZSBub3QKTm90IHRoZSBzYW1lLCBu' +
+               'bwpJIGFtIHRoZSBvbmUgSm9obm55IENhcmNpbm9nZW4=')
+    key = b'THE LONGEST LINE'
+    plainbytes = junk(randrange(0,64)) + plainbytes + base64_to_bytes(b64text)
+    return encrypt_aes_ecb(pkcs7_pad(plainbytes, len(key)), key)
+
 def identify_aes_mode(cryptbytes, blocksize=16):
     chunks = [cryptbytes[i:i+blocksize]
               for i in range(0, len(cryptbytes), blocksize)]
@@ -206,78 +229,65 @@ def identify_aes_mode(cryptbytes, blocksize=16):
 
 def break_ecb(crypt_method):
     """
-    Implementation of the solution of challenge 12. It's here because I
-    thought it might be somewhat reusable.
+    General purpose AES ECB thing. Takes crypt_methods that take a plaintext
+    and then append a secret message prior to encrypting, and discovers that
+    secret message. Does not depend on any particular alignment; as a result,
+    makes a LOT of calls to the crypt_method.
+
+    Solves challenges #12 and #14.
     """
-    # Step 1: Discover the block size.
     blocksize = brute_ecb_blocksize(crypt_method)
-    print('Detected block size: %d' % blocksize)
-    # Step 2: Detect ECB.
-    testcase = b'x' * blocksize * 2
-    mode = identify_aes_mode(crypt_method(testcase), blocksize)
-    print('Detected mode: %s' % mode)
-    if mode != 'ECB':
-        print('Cannot proceed.')
-        return
-    # Step 3: Get crackin'.
+    if not blocksize:
+        print('Unable to determine block size. :(')
+        return None
+    print('Found blocksize: %d' % blocksize)
+
     known = b''
     while True:
-        result = crack_byte(crypt_method, blocksize, known)
-        if not result:
+        prefix = b''
+        if len(known) < blocksize:
+            prefix = bytes(sample(range(0, 256), blocksize-len(known)-1))
+        table = build_lookup_table(crypt_method, blocksize,
+                                   prefix+known[-blocksize+1:])
+        byte = None
+        while byte is None:
+            # Don't rely on the crypt method to be evenly distributed with its
+            # randomness, pad the input a random amount first.
+            plainbytes = bytes(sample(range(0, 256), randrange(0, blocksize)))
+            plainbytes += prefix
+            cryptbytes = crypt_method(plainbytes)
+            chunks = [cryptbytes[i:i+blocksize]
+                      for i in range(0, len(cryptbytes), blocksize)]
+            for chunk in chunks:
+                if chunk in table:
+                    byte = table[chunk]
+                    known += bytes([byte])
+                    print('\rDecrypted %d bytes...' % len(known),
+                          end='', flush=True)
+                    break
+        if pkcs7_is_padded(known):
+            known = pkcs7_unpad(known).decode()
             break
-        known += result
+    print(' Done!')
     return known
 
 def brute_ecb_blocksize(crypt_method):
     """
-    Throw a bunch of cases at a crypto method until the block size is
-    discovered via a repeat in the output.
+    Determine blocksize by throwing repeating strings with a period of
+    [guessed blocksize] at the encryption routine and look for repeating
+    motifs in the result. This doesn't require us to know where (exactly) our
+    input text will be inserted.
     """
-    blocksize = 0
-    # Start guessing at 4... any smaller, seems like we might accidentally
-    # identify a block size by chance duplication.
-    guess = 4
-    # Send twice the guessed block size and look for duplicates.
-    testcase = b'x' * guess * 2
-    while not blocksize:
-        cryptbytes = crypt_method(testcase)
-        chunks = [cryptbytes[i:i+guess]
-                  for i in range(0, len(cryptbytes), guess)]
-        if len(chunks) > len(set(chunks)):
-            blocksize = guess
-            break
-        testcase += b'xx'
-        guess += 1
-    return blocksize
-
-def crack_byte(crypt_method, blocksize, known):
-    """
-    Pretty specific to challenge 12: calls crypt_method 256 times to figure
-    out the byte that follows the given 'known' bytes. Returns None if it
-    can't determine a next byte.
-    """
-    # This could probably be prettier.
-    result = None
-    if len(known) < blocksize:
-        # Breaking the first block
-        plainbytes = b'A' * (blocksize-len(known)-1)
-        table = build_lookup_table(crypt_method, blocksize, plainbytes+known)
-        result = bytes([table[crypt_method(plainbytes)[:blocksize]]])
-    else:
-        # Breaking subsequent blocks is a little trickier. Build a lookup
-        # table as usual, then force the target text to align with a block so
-        # that we can look it up.
-        plainbytes = known[-blocksize+1:]
-        table = build_lookup_table(crypt_method, blocksize, plainbytes)
-        # In this case, padding exists only to align the target block correctly
-        padding = b'A' * (blocksize - (len(known) % blocksize) - 1)
-        # Offset to the encrypted block we care about
-        offset = len(padding) + len(known) - blocksize + 1
-        cryptbytes = crypt_method(padding)
-        chunk = cryptbytes[offset:offset+blocksize]
-        if chunk in table:
-            result = bytes([table[chunk]])
-    return result
+    REPEATS = 20
+    for blocksize in range(4, 128):
+        motif = sample(range(0, 256), blocksize)
+        plainbytes = bytes(motif) * REPEATS
+        cryptbytes = crypt_method(plainbytes)
+        max_repeats, _ = find_longest_repeat(cryptbytes, blocksize)
+        # If aligned on a block boundary, we'll see n repeats, otherwise n-1
+        if max_repeats in [REPEATS-1, REPEATS]:
+            return blocksize
+    return None
 
 def build_lookup_table(crypt_method, blocksize, prefix):
     """
@@ -288,6 +298,43 @@ def build_lookup_table(crypt_method, blocksize, prefix):
     table = {}
     for x in range(0, 256):
         testcase = prefix + bytes([x])
-        crypt_chunk = crypt_method(testcase)[:blocksize]
+        crypt_chunk = block_oracle(crypt_method, blocksize, testcase)
         table[crypt_chunk] = x
     return table
+
+def block_oracle(crypt_method, blocksize, plainbytes):
+    """
+    Return the encrypted bytes for the given plainbytes and block size,
+    regardless of where the plaintext might appear. (So any random amount
+    of padding before the plainbytes will not cause a problem.)
+    """
+    assert len(plainbytes) == blocksize
+    # Lower is faster, but increases possibility of a false positive.
+    REPEATS = 10
+    repeated_bytes = plainbytes * REPEATS
+    inbytes = b'\x00'.join([repeated_bytes] * blocksize)
+    cryptbytes = crypt_method(inbytes)
+    max_repeats, cryptbytes = find_longest_repeat(cryptbytes, blocksize)
+    # If aligned on a block boundary, we should find a case with n REPEATS
+    if max_repeats == REPEATS:
+        return cryptbytes
+    raise Exception('Failed to find the encrypted bytes.')
+
+def find_longest_repeat(data, blocksize):
+    """
+    Break up data into chunks of blocksize and look for the longest continuous
+    string of repeated chunks. Returns a tuple (max_repeats, repeated_content).
+    """
+    chunks = [data[i:i+blocksize] for i in range(0, len(data), blocksize)]
+    prev = None
+    count = 1
+    max_result = (0, None)
+    for chunk in chunks:
+        if chunk == prev:
+            count += 1
+        else:
+            count = 1
+        if count > max_result[0]:
+            max_result = (count, chunk)
+        prev = chunk
+    return max_result
