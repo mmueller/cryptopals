@@ -36,6 +36,8 @@ def expect(actual, expected):
         print('Failed.')
         print('  Expected: %r' % expected)
         print('  Actual:   %r' % actual)
+        return False
+    return True
 
 @challenge(1)
 def c1():
@@ -216,6 +218,19 @@ def c14():
     message = crypto.break_ecb(crypto.encryption_oracle_3)
     print('Message:')
     print(message)
+
+@challenge(15)
+def c15():
+    EXAMPLES = [
+        (b'ICE ICE BABY\x04\x04\x04\x04', True),
+        (b'ICE ICE BABY\x05\x05\x05\x05', False),
+        (b'ICE ICE BABY\x01\x02\x03\x04', False),
+    ]
+    result = True
+    for buf, expected_result in EXAMPLES:
+        result = result and expect(crypto.pkcs7_is_padded(buf), expected_result)
+    if result:
+        print('All padding tests passed.')
 
 if __name__ == '__main__':
     to_run = sorted(challenges.keys())
